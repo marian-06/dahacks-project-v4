@@ -23,6 +23,14 @@ export default function HomePage() {
   const [result, setResult] = useState<ProcessedContent | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [isPlaying, setIsPlaying] = useState(false)
+  const [isRecording, setIsRecording] = useState(false)
+  const [transcript, setTranscript] = useState("")
+  const [feynmanLoading, setFeynmanLoading] = useState(false)
+  const [feynmanError, setFeynmanError] = useState<string | null>(null)
+  const [feynmanFeedback, setFeynmanFeedback] = useState<string | null>(null)
+  const [feynmanFlashcards, setFeynmanFlashcards] = useState<Array<{ question: string; answer: string }>>([])
+  const [studyMaterialText, setStudyMaterialText] = useState<string | null>(null)
+  let recognition: SpeechRecognition | null = null
 
   const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = event.target.files?.[0]
@@ -86,6 +94,7 @@ export default function HomePage() {
       }
 
       const { text } = await extractResponse.json()
+      setStudyMaterialText(text)
 
       // Step 2: Generate content with OpenAI
       setProgress(50)
@@ -162,6 +171,70 @@ export default function HomePage() {
     if ("speechSynthesis" in window) {
       speechSynthesis.cancel()
       setIsPlaying(false)
+    }
+  }
+
+  // Feynman Technique: Speech-to-text logic
+  const startRecording = () => {
+    setFeynmanError(null)
+    setTranscript("")
+    if (!('webkitSpeechRecognition' in window || 'SpeechRecognition' in window)) {
+      setFeynmanError("Speech recognition not supported in this browser.")
+      return
+    }
+    // @ts-ignore
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
+    recognition = new SpeechRecognition()
+    recognition.lang = 'en-US'
+    recognition.interimResults = false
+    recognition.maxAlternatives = 1
+    recognition.onresult = (event: SpeechRecognitionEvent) => {
+      setTranscript(event.results[0][0].transcript)
+    }
+    recognition.onerror = (event: any) => {
+      setFeynmanError("Speech recognition error: " + event.error)
+      setIsRecording(false)
+    }
+    recognition.onend = () => {
+      setIsRecording(false)
+    }
+    recognition.start()
+    setIsRecording(true)
+  }
+
+  const stopRecording = () => {
+    if (recognition) {
+      recognition.stop()
+    }
+    setIsRecording(false)
+  }
+
+  const handleFeynmanSubmit = async () => {
+    if (!studyMaterialText || !transcript.trim()) {
+      setFeynmanError("Please provide both your explanation and study material.")
+      return
+    }
+    setFeynmanLoading(true)
+    setFeynmanError(null)
+    setFeynmanFeedback(null)
+    setFeynmanFlashcards([])
+    try {
+      const res = await fetch("/api/feynman", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ studyMaterial: studyMaterialText, explanation: transcript }),
+      })
+      if (!res.ok) {
+        const err = await res.json()
+        throw new Error(err.error || "Failed to process explanation.")
+      }
+      const data = await res.json()
+      setFeynmanFeedback(data.feedback)
+      setFeynmanFlashcards(data.flashcards)
+    } catch (err: any) {
+      setFeynmanError(err.message || "An error occurred.")
+    } finally {
+      setFeynmanLoading(false)
     }
   }
 
@@ -310,6 +383,60 @@ export default function HomePage() {
                     <p className="text-sm text-gray-500 text-center">
                       And {result.flashcards.length - 3} more flashcards in your study guide...
                     </p>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* FEYNMAN TECHNIQUE SECTION */}
+            <Card>
+              <CardHeader>
+                <CardTitle>Feynman Technique: Explain in Your Own Words</CardTitle>
+                <CardDescription>
+                  Click the mic, explain the material out loud, and get feedback + flashcards for what you missed!
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-4">
+                  <div className="flex items-center gap-2">
+                    <Button onClick={isRecording ? stopRecording : startRecording} variant="outline">
+                      {isRecording ? (
+                        <span className="text-red-500 font-bold">● Stop</span>
+                      ) : (
+                        <span>🎤 Start Recording</span>
+                      )}
+                    </Button>
+                    <span className="text-gray-500 text-sm">{isRecording ? "Listening..." : ""}</span>
+                  </div>
+                  <textarea
+                    className="w-full border rounded p-2 min-h-[80px]"
+                    placeholder="Your explanation will appear here..."
+                    value={transcript}
+                    onChange={e => setTranscript(e.target.value)}
+                    disabled={isRecording}
+                  />
+                  <Button onClick={handleFeynmanSubmit} disabled={feynmanLoading || !transcript.trim()}>
+                    {feynmanLoading ? "Analyzing..." : "Get Feedback & Flashcards"}
+                  </Button>
+                  {feynmanError && <Alert><AlertDescription>{feynmanError}</AlertDescription></Alert>}
+                  {feynmanFeedback && (
+                    <div className="mt-4">
+                      <div className="font-semibold mb-2">Feedback:</div>
+                      <div className="bg-gray-50 border rounded p-3 mb-4">{feynmanFeedback}</div>
+                      {feynmanFlashcards.length > 0 && (
+                        <div>
+                          <div className="font-semibold mb-2">Flashcards for Missed Concepts:</div>
+                          <div className="space-y-3">
+                            {feynmanFlashcards.map((card, idx) => (
+                              <div key={idx} className="border rounded-lg p-3">
+                                <div className="font-medium text-gray-900 mb-1">Q: {card.question}</div>
+                                <div className="text-gray-700">A: {card.answer}</div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   )}
                 </div>
               </CardContent>
